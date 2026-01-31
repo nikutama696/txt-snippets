@@ -1,0 +1,26 @@
+# Sample snippets for txt-snippets
+# Format: trigger::replacement
+# Special tags: \n (newline), \t (tab), $CURSOR$ (cursor position)
+# Dynamic variables: $DATE_YYYYMMDD$, $DATE_YYYY/MM/DD$, $DATE_YYYY年M月D日$, $TIME_HH:MM:SS$, $DATETIME$
+
+# Greetings
+]hello::Hello, World! 👋
+]thx::Thank you so much! 😊
+]ari::ありがとうございます😸
+
+# Multi-line example
+]sig::Best regards,\nYour Name
+
+# Date/Time (dynamic)
+]da::$DATE_YYYYMMDD$
+]dda::$DATE_YYYY/MM/DD$
+]ddda::$DATE_YYYY年M月D日$
+]time::$TIME_HH:MM:SS$
+]now::$DATETIME$
+
+# Cursor positioning example
+]tag::<div>$CURSOR$</div>
+]link::[link text]($CURSOR$)
+
+# Email
+]mail::your.email@example.com
