@@ -1,8 +1,6 @@
 """Text expansion engine for txt-snippets."""
 
 import time
-import threading
-import subprocess
 import sys
 from collections import deque
 from datetime import datetime
@@ -22,6 +20,7 @@ class Expander:
     """
 
     BUFFER_SIZE = 30  # Max characters to track
+    COOLDOWN_SECONDS = 0.3  # Ignore key events for this long after expansion
 
     # Dynamic variables
     DYNAMIC_VARS = {
@@ -38,9 +37,10 @@ class Expander:
         self.buffer: deque[str] = deque(maxlen=self.BUFFER_SIZE)
         self.controller = Controller()
         self.listener: keyboard.Listener | None = None
-        self._suppressed = False  # Flag to prevent recursive triggering
+        self._suppressed = False
+        self._last_expand_time: float = 0  # Cooldown timer
         self._running = False
-        self._lock = threading.Lock()
+        self._expanding = False
 
     def start(self) -> None:
         """Start the keyboard listener."""
@@ -63,17 +63,20 @@ class Expander:
 
     def _on_press(self, key) -> None:
         """Handle key press events."""
-        pass  # We primarily use on_release for character detection
+        pass
 
     def _on_release(self, key) -> None:
         """Handle key release events."""
         if self._suppressed:
             return
 
+        # Ignore events during cooldown period after expansion
+        if time.time() - self._last_expand_time < self.COOLDOWN_SECONDS:
+            return
+
         # Convert key to character
         char = self._key_to_char(key)
         if char is None:
-            # Handle special keys that should clear or modify buffer
             if key == Key.space:
                 self.buffer.append(" ")
             elif key == Key.enter or key == Key.tab:
@@ -81,8 +84,11 @@ class Expander:
             elif key == Key.backspace:
                 if self.buffer:
                     self.buffer.pop()
-            elif key in (Key.left, Key.right, Key.up, Key.down, Key.home, Key.end):
-                # Arrow keys and navigation - clear buffer
+            elif key in (Key.left, Key.right, Key.up, Key.down,
+                         Key.home, Key.end, Key.cmd, Key.cmd_r,
+                         Key.ctrl, Key.ctrl_r, Key.alt, Key.alt_r,
+                         Key.shift, Key.shift_r):
+                # Modifier keys and navigation - clear buffer
                 self.buffer.clear()
             return
 
@@ -99,7 +105,6 @@ class Expander:
     def _key_to_char(self, key) -> str | None:
         """Convert a pynput key to a character string."""
         try:
-            # Regular characters
             if hasattr(key, "char") and key.char is not None:
                 return key.char
         except AttributeError:
@@ -108,28 +113,30 @@ class Expander:
 
     def _expand(self, snippet: Snippet) -> None:
         """Execute the text expansion."""
-        with self._lock:
-            self._suppressed = True
-            try:
-                # Calculate how many backspaces to send
-                trigger_len = len(snippet.trigger)
+        self._suppressed = True
+        self._expanding = True
+        try:
+            trigger_len = len(snippet.trigger)
 
-                # Send backspaces to delete the trigger
-                for _ in range(trigger_len):
-                    self.controller.press(Key.backspace)
-                    self.controller.release(Key.backspace)
-                    time.sleep(0.01)  # Small delay for reliability
+            # Delete the trigger
+            for _ in range(trigger_len):
+                self.controller.press(Key.backspace)
+                self.controller.release(Key.backspace)
+                time.sleep(0.01)
 
-                time.sleep(0.05)  # Wait before pasting
+            time.sleep(0.05)
 
-                # Process and type the replacement
-                self._type_replacement(snippet)
+            # Paste the replacement
+            self._type_replacement(snippet)
 
-                # Clear the buffer after expansion
-                self.buffer.clear()
+            # Clear buffer
+            self.buffer.clear()
 
-            finally:
-                self._suppressed = False
+        finally:
+            self._expanding = False
+            self._suppressed = False
+            # Set cooldown timer to ignore residual key events
+            self._last_expand_time = time.time()
 
     def _process_dynamic_vars(self, text: str) -> str:
         """Replace dynamic variables in text."""
@@ -146,21 +153,17 @@ class Expander:
         # Process dynamic variables
         replacement = self._process_dynamic_vars(replacement)
 
-        # Handle escape sequences - convert to actual characters
+        # Handle escape sequences
         replacement = replacement.replace("\\n", "\n").replace("\\t", "\t")
 
         # For cursor positioning, split into parts
         if snippet.cursor_position is not None and snippet.cursor_position > 0:
-            # Calculate where to split
             split_pos = len(replacement) - snippet.cursor_position
             part_a = replacement[:split_pos]
             part_b = replacement[split_pos:]
 
-            # Paste first part
             self._paste_text(part_a)
             time.sleep(0.05)
-
-            # Paste second part
             self._paste_text(part_b)
             time.sleep(0.05)
 
@@ -170,7 +173,6 @@ class Expander:
                 self.controller.release(Key.left)
                 time.sleep(0.01)
         else:
-            # Paste entire text
             self._paste_text(replacement)
 
     def _paste_text(self, text: str) -> None:
@@ -181,15 +183,9 @@ class Expander:
         try:
             import pyperclip
 
-            # Save current clipboard
-            try:
-                old_clipboard = pyperclip.paste()
-            except Exception:
-                old_clipboard = ""
-
-            # Set new text and paste
+            # Copy text to clipboard
             pyperclip.copy(text)
-            time.sleep(0.02)
+            time.sleep(0.05)
 
             # Paste using Cmd+V (macOS) or Ctrl+V (Windows/Linux)
             if is_macos():
@@ -203,19 +199,14 @@ class Expander:
                 self.controller.release("v")
                 self.controller.release(Key.ctrl)
 
-            time.sleep(0.05)
-
-            # Restore old clipboard
-            try:
-                pyperclip.copy(old_clipboard)
-            except Exception:
-                pass
+            time.sleep(0.1)
 
         except ImportError:
-            # Fallback to direct typing if pyperclip not available
             self.controller.type(text)
 
     def reload_library(self) -> None:
-        """Reload the snippet library."""
+        """Reload the snippet library (waits if expansion is in progress)."""
+        while self._expanding:
+            time.sleep(0.1)
         self.library.reload()
         self.buffer.clear()

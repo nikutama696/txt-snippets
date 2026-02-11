@@ -118,10 +118,12 @@ class TrayApp:
         self,
         config: Config,
         on_reload: Callable[[], None],
+        on_restart: Callable[[], None],
         on_exit: Callable[[], None],
     ):
         self.config = config
         self.on_reload = on_reload
+        self.on_restart = on_restart
         self.on_exit = on_exit
         self.icon: pystray.Icon | None = None
 
@@ -138,6 +140,7 @@ class TrayApp:
             Item("Set Library Path", self._set_library_path),
             Item("Reload", self._reload),
             pystray.Menu.SEPARATOR,
+            Item("Restart", self._restart),
             Item("Exit", self._exit),
         )
 
@@ -173,6 +176,10 @@ class TrayApp:
     def _reload(self) -> None:
         """Reload the snippet library."""
         self.on_reload()
+
+    def _restart(self) -> None:
+        """Restart the application."""
+        self.on_restart()
 
     def _exit(self) -> None:
         """Exit the application."""
