@@ -182,12 +182,9 @@ class Expander:
 
         try:
             import pyperclip
-
-            # Copy text to clipboard
             pyperclip.copy(text)
             time.sleep(0.05)
 
-            # Paste using Cmd+V (macOS) or Ctrl+V (Windows/Linux)
             if is_macos():
                 self.controller.press(Key.cmd)
                 self.controller.press("v")
@@ -200,7 +197,6 @@ class Expander:
                 self.controller.release(Key.ctrl)
 
             time.sleep(0.1)
-
         except ImportError:
             self.controller.type(text)
 
