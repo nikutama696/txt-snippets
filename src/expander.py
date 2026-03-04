@@ -177,126 +177,47 @@ class Expander:
         else:
             self._paste_text(replacement)
 
-    @staticmethod
-    def _has_non_bmp(text: str) -> bool:
-        """Check if text contains non-BMP characters (emojis etc.)."""
-        return any(ord(ch) > 0xFFFF for ch in text)
-
-    @staticmethod
-    def _split_bmp_segments(text: str) -> list[tuple[bool, str]]:
-        """
-        Split text into segments of (is_bmp, substring).
-        Groups consecutive BMP chars together, and consecutive non-BMP chars together.
-        """
-        if not text:
-            return []
-        segments: list[tuple[bool, str]] = []
-        current_is_bmp = ord(text[0]) <= 0xFFFF
-        current_chars = [text[0]]
-        for ch in text[1:]:
-            ch_is_bmp = ord(ch) <= 0xFFFF
-            if ch_is_bmp == current_is_bmp:
-                current_chars.append(ch)
-            else:
-                segments.append((current_is_bmp, "".join(current_chars)))
-                current_is_bmp = ch_is_bmp
-                current_chars = [ch]
-        segments.append((current_is_bmp, "".join(current_chars)))
-        return segments
-
-    def _cg_type_text(self, text: str) -> None:
-        """
-        Type text using CoreGraphics CGEvent API (macOS only).
-        Handles all Unicode characters including emojis by directly
-        creating keyboard events with UTF-16 encoded strings.
-        """
-        import ctypes
-        import ctypes.util
-
-        # Load CoreGraphics framework
-        cg_path = ctypes.util.find_library("CoreGraphics")
-        cg = ctypes.cdll.LoadLibrary(cg_path)
-
-        cf_path = ctypes.util.find_library("CoreFoundation")
-        cf = ctypes.cdll.LoadLibrary(cf_path)
-
-        # Set return types
-        cg.CGEventCreateKeyboardEvent.restype = ctypes.c_void_p
-        cg.CGEventCreateKeyboardEvent.argtypes = [
-            ctypes.c_void_p, ctypes.c_uint16, ctypes.c_bool
-        ]
-        cg.CGEventKeyboardSetUnicodeString.argtypes = [
-            ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p
-        ]
-        cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
-        cf.CFRelease.argtypes = [ctypes.c_void_p]
-
-        kCGHIDEventTap = 0
-
-        # Encode text as UTF-16LE (UniChar array)
-        utf16_bytes = text.encode("utf-16-le")
-        utf16_len = len(utf16_bytes) // 2
-        UniCharArray = ctypes.c_uint16 * utf16_len
-        buf = UniCharArray(*[
-            int.from_bytes(utf16_bytes[i:i + 2], "little")
-            for i in range(0, len(utf16_bytes), 2)
-        ])
-
-        # Key down event
-        event_down = cg.CGEventCreateKeyboardEvent(None, 0, True)
-        cg.CGEventKeyboardSetUnicodeString(event_down, utf16_len, buf)
-        cg.CGEventPost(kCGHIDEventTap, event_down)
-
-        time.sleep(0.02)
-
-        # Key up event
-        event_up = cg.CGEventCreateKeyboardEvent(None, 0, False)
-        cg.CGEventKeyboardSetUnicodeString(event_up, utf16_len, buf)
-        cg.CGEventPost(kCGHIDEventTap, event_up)
-
-        # Release CF objects
-        cf.CFRelease(event_down)
-        cf.CFRelease(event_up)
-
-        time.sleep(0.02)
-
-    def _type_unicode(self, text: str) -> None:
-        """
-        Output text without using the clipboard.
-        On macOS: uses controller.type() for BMP chars,
-                  CoreGraphics CGEvent API for non-BMP (emojis).
-        On Windows/Linux: uses controller.type() for everything.
-        """
-        if not text:
-            return
-
-        is_mac = platform.system() == "Darwin"
-
-        # Fast path: no non-BMP characters, or not on macOS
-        if not is_mac or not self._has_non_bmp(text):
-            self.controller.type(text)
-            time.sleep(0.01 * len(text))
-            return
-
-        # macOS with emojis: split into BMP and non-BMP segments
-        for is_bmp, segment in self._split_bmp_segments(text):
-            if is_bmp:
-                self.controller.type(segment)
-                time.sleep(0.01 * len(segment))
-            else:
-                self._cg_type_text(segment)
-                time.sleep(0.05)
-
     def _paste_text(self, text: str) -> None:
-        """Output text using the clipboard-free injection method."""
+        """Paste text using clipboard (handles Unicode/emoji properly)."""
         if not text:
             return
 
-        # Use the new direct typing logic
-        self._type_unicode(text)
+        try:
+            import pyperclip
+            
+            # Save original clipboard content
+            try:
+                original_clipboard = pyperclip.paste()
+            except Exception:
+                original_clipboard = ""
 
-        # Still use a small delay and cooldown logic to maintain expander stability
-        time.sleep(0.05)
+            # Copy text to clipboard
+            pyperclip.copy(text)
+            time.sleep(0.05)
+
+            # Paste using Cmd+V (macOS) or Ctrl+V (Windows/Linux)
+            if is_macos():
+                self.controller.press(Key.cmd)
+                self.controller.press("v")
+                self.controller.release("v")
+                self.controller.release(Key.cmd)
+            else:
+                self.controller.press(Key.ctrl)
+                self.controller.press("v")
+                self.controller.release("v")
+                self.controller.release(Key.ctrl)
+
+            # Wait longer for paste to complete before restoring
+            time.sleep(0.15)
+            
+            # Restore original clipboard content
+            try:
+                pyperclip.copy(original_clipboard)
+            except Exception:
+                pass
+
+        except ImportError:
+            self.controller.type(text)
 
     def reload_library(self) -> None:
         """Reload the snippet library (waits if expansion is in progress)."""
